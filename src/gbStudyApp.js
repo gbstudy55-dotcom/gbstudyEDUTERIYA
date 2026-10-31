@@ -206,11 +206,14 @@ function Ee(e) {
 async function $e() {
   try {
     const e = await fetch("/api/verify/status", {
-      credentials: "same-origin",
       headers: { Accept: "application/json" },
-    });
-    if (e.ok) {
-      B = await e.json();
+    }).catch(() => null);
+    const ct = e ? e.headers.get("content-type") || "" : "";
+    if (e && e.ok && !ct.includes("text/html")) {
+      const text = await e.text();
+      B = text.trim().startsWith("<")
+        ? { enabled: false, isVerified: true, expiresAt: null, remainingMs: 0 }
+        : JSON.parse(text);
     } else {
       B = { enabled: false, isVerified: true, expiresAt: null, remainingMs: 0 };
     }
@@ -487,13 +490,14 @@ async function Pe() {
     e
   );
 }
-const qe = "/api",
-  Be = !0;
+let qe = "/api";
+const TARGET_API_FALLBACK = "https://all.codewithvivek.qzz.io/api";
+const Be = !0;
 async function D(e, t) {
   var s;
   const i = (t || ie.platform || "eduteria").toLowerCase(),
     a = new AbortController(),
-    n = setTimeout(() => a.abort(), 10000);
+    n = setTimeout(() => a.abort(), 12000);
   const outgoingHeaders = {
     "x-platform": i,
     platform: i,
@@ -506,20 +510,31 @@ async function D(e, t) {
       headers: outgoingHeaders,
     }).catch(() => null);
 
-    // Fallback directly to target API if local proxy failed
-    if (!l || (!l.ok && (l.status === 404 || l.status >= 500 || l.status === 400))) {
+    let isHtml = false;
+    if (l) {
+      const ct = l.headers.get("content-type") || "";
+      if (ct.includes("text/html")) isHtml = true;
+    }
+
+    // If local endpoint was unreachable, errored, or returned HTML (SPA fallback on Vercel)
+    if (!l || !l.ok || isHtml) {
+      qe = TARGET_API_FALLBACK;
       try {
-        const fallbackRes = await fetch("https://all.codewithvivek.qzz.io" + qe + e, {
+        const fallbackRes = await fetch(TARGET_API_FALLBACK + e, {
           signal: a.signal,
           headers: outgoingHeaders,
         });
         if (fallbackRes.ok) {
-          l = fallbackRes;
+          const ct = fallbackRes.headers.get("content-type") || "";
+          if (!ct.includes("text/html")) {
+            l = fallbackRes;
+            isHtml = false;
+          }
         }
       } catch {}
     }
 
-    if (!l || !l.ok) {
+    if (!l || !l.ok || isHtml) {
       throw (
         l && l.status === 403 &&
           (s = l.headers.get("content-type")) != null &&
@@ -529,7 +544,24 @@ async function D(e, t) {
         new Error(`HTTP ${l ? l.status : "Request failed"}`)
       );
     }
-    const d = await l.json();
+
+    const text = await l.text();
+    if (text.trim().startsWith("<")) {
+      const directRes = await fetch(TARGET_API_FALLBACK + e, {
+        headers: outgoingHeaders,
+      });
+      const directText = await directRes.text();
+      const directData = JSON.parse(directText);
+      if (directData.success === !1) throw new Error(directData.error || "API error");
+      return (
+        Array.isArray(directData.data) &&
+          directData.courseTitle &&
+          (directData.data.courseTitle = directData.courseTitle),
+        directData.data ?? directData
+      );
+    }
+
+    const d = JSON.parse(text);
     if (d.success === !1) throw new Error(d.error || "API error");
     return (
       Array.isArray(d.data) &&
